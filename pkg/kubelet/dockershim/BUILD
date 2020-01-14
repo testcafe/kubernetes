@@ -17,10 +17,13 @@ go_library(
         "docker_logs.go",
         "docker_sandbox.go",
         "docker_service.go",
+        "docker_stats.go",
         "docker_stats_linux.go",
         "docker_stats_unsupported.go",
         "docker_stats_windows.go",
         "docker_streaming.go",
+        "docker_streaming_others.go",
+        "docker_streaming_windows.go",
         "exec.go",
         "helpers.go",
         "helpers_linux.go",
@@ -91,6 +94,7 @@ go_test(
         "docker_image_test.go",
         "docker_sandbox_test.go",
         "docker_service_test.go",
+        "docker_stats_test.go",
         "helpers_linux_test.go",
         "helpers_test.go",
         "naming_test.go",
@@ -119,6 +123,9 @@ go_test(
         "//vendor/github.com/stretchr/testify/assert:go_default_library",
         "//vendor/github.com/stretchr/testify/require:go_default_library",
     ] + select({
+        "@io_bazel_rules_go//go/platform:android": [
+            "//staging/src/k8s.io/api/core/v1:go_default_library",
+        ],
         "@io_bazel_rules_go//go/platform:linux": [
             "//staging/src/k8s.io/api/core/v1:go_default_library",
         ],

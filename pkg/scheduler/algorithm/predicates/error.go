@@ -19,7 +19,7 @@ package predicates
 import (
 	"fmt"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 )
 
 var (
@@ -31,54 +31,34 @@ var (
 	// it can never be made to pass by removing pods, you need to add the predicate
 	// failure error in nodesWherePreemptionMightHelp() in scheduler/core/generic_scheduler.go
 
-	// ErrDiskConflict is used for NoDiskConflict predicate error.
-	ErrDiskConflict = newPredicateFailureError("NoDiskConflict", "node(s) had no available disk")
-	// ErrVolumeZoneConflict is used for NoVolumeZoneConflict predicate error.
-	ErrVolumeZoneConflict = newPredicateFailureError("NoVolumeZoneConflict", "node(s) had no available volume zone")
 	// ErrNodeSelectorNotMatch is used for MatchNodeSelector predicate error.
-	ErrNodeSelectorNotMatch = newPredicateFailureError("MatchNodeSelector", "node(s) didn't match node selector")
-	// ErrPodAffinityNotMatch is used for MatchInterPodAffinity predicate error.
-	ErrPodAffinityNotMatch = newPredicateFailureError("MatchInterPodAffinity", "node(s) didn't match pod affinity/anti-affinity")
-	// ErrPodAffinityRulesNotMatch is used for PodAffinityRulesNotMatch predicate error.
-	ErrPodAffinityRulesNotMatch = newPredicateFailureError("PodAffinityRulesNotMatch", "node(s) didn't match pod affinity rules")
-	// ErrPodAntiAffinityRulesNotMatch is used for PodAntiAffinityRulesNotMatch predicate error.
-	ErrPodAntiAffinityRulesNotMatch = newPredicateFailureError("PodAntiAffinityRulesNotMatch", "node(s) didn't match pod anti-affinity rules")
-	// ErrExistingPodsAntiAffinityRulesNotMatch is used for ExistingPodsAntiAffinityRulesNotMatch predicate error.
-	ErrExistingPodsAntiAffinityRulesNotMatch = newPredicateFailureError("ExistingPodsAntiAffinityRulesNotMatch", "node(s) didn't satisfy existing pods anti-affinity rules")
-	// ErrTaintsTolerationsNotMatch is used for PodToleratesNodeTaints predicate error.
-	ErrTaintsTolerationsNotMatch = newPredicateFailureError("PodToleratesNodeTaints", "node(s) had taints that the pod didn't tolerate")
+	ErrNodeSelectorNotMatch = NewPredicateFailureError("MatchNodeSelector", "node(s) didn't match node selector")
 	// ErrPodNotMatchHostName is used for HostName predicate error.
-	ErrPodNotMatchHostName = newPredicateFailureError("HostName", "node(s) didn't match the requested hostname")
+	ErrPodNotMatchHostName = NewPredicateFailureError("HostName", "node(s) didn't match the requested hostname")
 	// ErrPodNotFitsHostPorts is used for PodFitsHostPorts predicate error.
-	ErrPodNotFitsHostPorts = newPredicateFailureError("PodFitsHostPorts", "node(s) didn't have free ports for the requested pod ports")
-	// ErrNodeLabelPresenceViolated is used for CheckNodeLabelPresence predicate error.
-	ErrNodeLabelPresenceViolated = newPredicateFailureError("CheckNodeLabelPresence", "node(s) didn't have the requested labels")
-	// ErrServiceAffinityViolated is used for CheckServiceAffinity predicate error.
-	ErrServiceAffinityViolated = newPredicateFailureError("CheckServiceAffinity", "node(s) didn't match service affinity")
-	// ErrMaxVolumeCountExceeded is used for MaxVolumeCount predicate error.
-	ErrMaxVolumeCountExceeded = newPredicateFailureError("MaxVolumeCount", "node(s) exceed max volume count")
-	// ErrNodeUnderMemoryPressure is used for NodeUnderMemoryPressure predicate error.
-	ErrNodeUnderMemoryPressure = newPredicateFailureError("NodeUnderMemoryPressure", "node(s) had memory pressure")
-	// ErrNodeUnderDiskPressure is used for NodeUnderDiskPressure predicate error.
-	ErrNodeUnderDiskPressure = newPredicateFailureError("NodeUnderDiskPressure", "node(s) had disk pressure")
-	// ErrNodeUnderPIDPressure is used for NodeUnderPIDPressure predicate error.
-	ErrNodeUnderPIDPressure = newPredicateFailureError("NodeUnderPIDPressure", "node(s) had pid pressure")
-	// ErrNodeNotReady is used for NodeNotReady predicate error.
-	ErrNodeNotReady = newPredicateFailureError("NodeNotReady", "node(s) were not ready")
-	// ErrNodeNetworkUnavailable is used for NodeNetworkUnavailable predicate error.
-	ErrNodeNetworkUnavailable = newPredicateFailureError("NodeNetworkUnavailable", "node(s) had unavailable network")
-	// ErrNodeUnschedulable is used for NodeUnschedulable predicate error.
-	ErrNodeUnschedulable = newPredicateFailureError("NodeUnschedulable", "node(s) were unschedulable")
+	ErrPodNotFitsHostPorts = NewPredicateFailureError("PodFitsHostPorts", "node(s) didn't have free ports for the requested pod ports")
 	// ErrNodeUnknownCondition is used for NodeUnknownCondition predicate error.
-	ErrNodeUnknownCondition = newPredicateFailureError("NodeUnknownCondition", "node(s) had unknown conditions")
-	// ErrVolumeNodeConflict is used for VolumeNodeAffinityConflict predicate error.
-	ErrVolumeNodeConflict = newPredicateFailureError("VolumeNodeAffinityConflict", "node(s) had volume node affinity conflict")
-	// ErrVolumeBindConflict is used for VolumeBindingNoMatch predicate error.
-	ErrVolumeBindConflict = newPredicateFailureError("VolumeBindingNoMatch", "node(s) didn't find available persistent volumes to bind")
-	// ErrFakePredicate is used for test only. The fake predicates returning false also returns error
-	// as ErrFakePredicate.
-	ErrFakePredicate = newPredicateFailureError("FakePredicateError", "Nodes failed the fake predicate")
+	ErrNodeUnknownCondition = NewPredicateFailureError("NodeUnknownCondition", "node(s) had unknown conditions")
 )
+
+var unresolvablePredicateFailureErrors = map[PredicateFailureReason]struct{}{
+	ErrNodeSelectorNotMatch: {},
+	ErrPodNotMatchHostName:  {},
+	// Node conditions won't change when scheduler simulates removal of preemption victims.
+	// So, it is pointless to try nodes that have not been able to host the pod due to node
+	// conditions.
+	ErrNodeUnknownCondition: {},
+}
+
+// UnresolvablePredicateExists checks if there is at least one unresolvable predicate failure reason.
+func UnresolvablePredicateExists(reasons []PredicateFailureReason) bool {
+	for _, r := range reasons {
+		if _, ok := unresolvablePredicateFailureErrors[r]; ok {
+			return true
+		}
+	}
+	return false
+}
 
 // InsufficientResourceError is an error type that indicates what kind of resource limit is
 // hit and caused the unfitting failure.
@@ -121,7 +101,8 @@ type PredicateFailureError struct {
 	PredicateDesc string
 }
 
-func newPredicateFailureError(predicateName, predicateDesc string) *PredicateFailureError {
+// NewPredicateFailureError creates a PredicateFailureError with message.
+func NewPredicateFailureError(predicateName, predicateDesc string) *PredicateFailureError {
 	return &PredicateFailureError{PredicateName: predicateName, PredicateDesc: predicateDesc}
 }
 
@@ -137,19 +118,4 @@ func (e *PredicateFailureError) GetReason() string {
 // PredicateFailureReason interface represents the failure reason of a predicate.
 type PredicateFailureReason interface {
 	GetReason() string
-}
-
-// FailureReason describes a failure reason.
-type FailureReason struct {
-	reason string
-}
-
-// NewFailureReason creates a FailureReason with message.
-func NewFailureReason(msg string) *FailureReason {
-	return &FailureReason{reason: msg}
-}
-
-// GetReason returns the reason of the FailureReason.
-func (e *FailureReason) GetReason() string {
-	return e.reason
 }

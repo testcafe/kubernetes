@@ -20,10 +20,12 @@ import (
 	"fmt"
 	"time"
 
-	apps "k8s.io/api/apps/v1"
+	appsv1 "k8s.io/api/apps/v1"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/kubernetes/test/e2e/framework"
+	"k8s.io/kubernetes/test/e2e/framework/replicaset"
 	"k8s.io/kubernetes/test/e2e/upgrades"
 
 	"github.com/onsi/ginkgo"
@@ -55,12 +57,12 @@ func (r *ReplicaSetUpgradeTest) Setup(f *framework.Framework) {
 	nginxImage := imageutils.GetE2EImage(imageutils.Nginx)
 
 	ginkgo.By(fmt.Sprintf("Creating replicaset %s in namespace %s", rsName, ns))
-	replicaSet := framework.NewReplicaSet(rsName, ns, 1, map[string]string{"test": "upgrade"}, "nginx", nginxImage)
+	replicaSet := newReplicaSet(rsName, ns, 1, map[string]string{"test": "upgrade"}, "nginx", nginxImage)
 	rs, err := c.AppsV1().ReplicaSets(ns).Create(replicaSet)
 	framework.ExpectNoError(err)
 
 	ginkgo.By(fmt.Sprintf("Waiting for replicaset %s to have all of its replicas ready", rsName))
-	framework.ExpectNoError(framework.WaitForReadyReplicaSet(c, ns, rsName))
+	framework.ExpectNoError(replicaset.WaitForReadyReplicaSet(c, ns, rsName))
 
 	r.UID = rs.UID
 }
@@ -84,20 +86,54 @@ func (r *ReplicaSetUpgradeTest) Test(f *framework.Framework, done <-chan struct{
 	}
 
 	ginkgo.By(fmt.Sprintf("Waiting for replicaset %s to have all of its replicas ready after upgrade", rsName))
-	framework.ExpectNoError(framework.WaitForReadyReplicaSet(c, ns, rsName))
+	framework.ExpectNoError(replicaset.WaitForReadyReplicaSet(c, ns, rsName))
 
 	// Verify the upgraded RS is active by scaling up the RS to scaleNum and ensuring all pods are Ready
 	ginkgo.By(fmt.Sprintf("Scaling up replicaset %s to %d", rsName, scaleNum))
-	_, err = framework.UpdateReplicaSetWithRetries(c, ns, rsName, func(rs *apps.ReplicaSet) {
+	_, err = replicaset.UpdateReplicaSetWithRetries(c, ns, rsName, func(rs *appsv1.ReplicaSet) {
 		*rs.Spec.Replicas = scaleNum
 	})
 	framework.ExpectNoError(err)
 
 	ginkgo.By(fmt.Sprintf("Waiting for replicaset %s to have all of its replicas ready after scaling", rsName))
-	framework.ExpectNoError(framework.WaitForReadyReplicaSet(c, ns, rsName))
+	framework.ExpectNoError(replicaset.WaitForReadyReplicaSet(c, ns, rsName))
 }
 
 // Teardown cleans up any remaining resources.
 func (r *ReplicaSetUpgradeTest) Teardown(f *framework.Framework) {
 	// rely on the namespace deletion to clean up everything
+}
+
+// newReplicaSet returns a new ReplicaSet.
+func newReplicaSet(name, namespace string, replicas int32, podLabels map[string]string, imageName, image string) *appsv1.ReplicaSet {
+	return &appsv1.ReplicaSet{
+		TypeMeta: metav1.TypeMeta{
+			Kind:       "ReplicaSet",
+			APIVersion: "apps/v1",
+		},
+		ObjectMeta: metav1.ObjectMeta{
+			Namespace: namespace,
+			Name:      name,
+		},
+		Spec: appsv1.ReplicaSetSpec{
+			Selector: &metav1.LabelSelector{
+				MatchLabels: podLabels,
+			},
+			Replicas: &replicas,
+			Template: v1.PodTemplateSpec{
+				ObjectMeta: metav1.ObjectMeta{
+					Labels: podLabels,
+				},
+				Spec: v1.PodSpec{
+					Containers: []v1.Container{
+						{
+							Name:            imageName,
+							Image:           image,
+							SecurityContext: &v1.SecurityContext{},
+						},
+					},
+				},
+			},
+		},
+	}
 }

@@ -28,7 +28,6 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/version"
 	clientset "k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/tools/clientcmd"
 	certutil "k8s.io/client-go/util/cert"
@@ -36,6 +35,7 @@ import (
 	kubeadmscheme "k8s.io/kubernetes/cmd/kubeadm/app/apis/kubeadm/scheme"
 	"k8s.io/kubernetes/cmd/kubeadm/app/componentconfigs"
 	"k8s.io/kubernetes/cmd/kubeadm/app/constants"
+	"k8s.io/kubernetes/cmd/kubeadm/app/util/apiclient"
 )
 
 // FetchInitConfigurationFromCluster fetches configuration from a ConfigMap in the cluster
@@ -60,7 +60,7 @@ func FetchInitConfigurationFromCluster(client clientset.Interface, w io.Writer, 
 // getInitConfigurationFromCluster is separate only for testing purposes, don't call it directly, use FetchInitConfigurationFromCluster instead
 func getInitConfigurationFromCluster(kubeconfigDir string, client clientset.Interface, newControlPlane bool) (*kubeadmapi.InitConfiguration, error) {
 	// Also, the config map really should be KubeadmConfigConfigMap...
-	configMap, err := client.CoreV1().ConfigMaps(metav1.NamespaceSystem).Get(constants.KubeadmConfigConfigMap, metav1.GetOptions{})
+	configMap, err := apiclient.GetConfigMapWithRetry(client, metav1.NamespaceSystem, constants.KubeadmConfigConfigMap)
 	if err != nil {
 		return nil, errors.Wrap(err, "failed to get config map")
 	}
@@ -78,7 +78,7 @@ func getInitConfigurationFromCluster(kubeconfigDir string, client clientset.Inte
 	}
 
 	// gets the component configs from the corresponding config maps
-	if err := getComponentConfigs(client, &initcfg.ClusterConfiguration); err != nil {
+	if err := componentconfigs.FetchFromCluster(&initcfg.ClusterConfiguration, client); err != nil {
 		return nil, errors.Wrap(err, "failed to get component configs")
 	}
 
@@ -93,6 +93,15 @@ func getInitConfigurationFromCluster(kubeconfigDir string, client clientset.Inte
 		if err := getAPIEndpoint(configMap.Data, initcfg.NodeRegistration.Name, &initcfg.LocalAPIEndpoint); err != nil {
 			return nil, errors.Wrap(err, "failed to getAPIEndpoint")
 		}
+	} else {
+		// In the case where newControlPlane is true we don't go through getNodeRegistration() and initcfg.NodeRegistration.CRISocket is empty.
+		// This forces DetectCRISocket() to be called later on, and if there is more than one CRI installed on the system, it will error out,
+		// while asking for the user to provide an override for the CRI socket. Even if the user provides an override, the call to
+		// DetectCRISocket() can happen too early and thus ignore it (while still erroring out).
+		// However, if newControlPlane == true, initcfg.NodeRegistration is not used at all and it's overwritten later on.
+		// Thus it's necessary to supply some default value, that will avoid the call to DetectCRISocket() and as
+		// initcfg.NodeRegistration is discarded, setting whatever value here is harmless.
+		initcfg.NodeRegistration.CRISocket = constants.DefaultDockerCRISocket
 	}
 	return initcfg, nil
 }
@@ -126,7 +135,7 @@ func getNodeRegistration(kubeconfigDir string, client clientset.Interface, nodeR
 	return nil
 }
 
-// getNodeNameFromConfig gets the node name from a kubelet config file
+// getNodeNameFromKubeletConfig gets the node name from a kubelet config file
 // TODO: in future we want to switch to a more canonical way for doing this e.g. by having this
 //       information in the local kubelet config.yaml
 func getNodeNameFromKubeletConfig(kubeconfigDir string) (string, error) {
@@ -138,7 +147,14 @@ func getNodeNameFromKubeletConfig(kubeconfigDir string) (string, error) {
 	}
 
 	// gets the info about the current user
-	authInfo := config.AuthInfos[config.Contexts[config.CurrentContext].AuthInfo]
+	currentContext, exists := config.Contexts[config.CurrentContext]
+	if !exists {
+		return "", errors.Errorf("invalid kubeconfig file %s: missing context %s", fileName, config.CurrentContext)
+	}
+	authInfo, exists := config.AuthInfos[currentContext.AuthInfo]
+	if !exists {
+		return "", errors.Errorf("invalid kubeconfig file %s: missing AuthInfo %s", fileName, currentContext.AuthInfo)
+	}
 
 	// gets the X509 certificate with current user credentials
 	var certs []*x509.Certificate
@@ -153,7 +169,7 @@ func getNodeNameFromKubeletConfig(kubeconfigDir string) (string, error) {
 			return "", err
 		}
 	} else {
-		return "", errors.New("invalid kubelet.conf. X509 certificate expected")
+		return "", errors.Errorf("invalid kubeconfig file %s. x509 certificate expected", fileName)
 	}
 
 	// We are only putting one certificate in the certificate pem file, so it's safe to just pick the first one
@@ -183,26 +199,9 @@ func getAPIEndpoint(data map[string]string, nodeName string, apiEndpoint *kubead
 	return nil
 }
 
-// getComponentConfigs gets the component configs from the corresponding config maps
-func getComponentConfigs(client clientset.Interface, clusterConfiguration *kubeadmapi.ClusterConfiguration) error {
-	// some config maps is versioned, so we need the KubernetesVersion for getting the right config map
-	k8sVersion := version.MustParseGeneric(clusterConfiguration.KubernetesVersion)
-	for kind, registration := range componentconfigs.Known {
-		obj, err := registration.GetFromConfigMap(client, k8sVersion)
-		if err != nil {
-			return err
-		}
-
-		if ok := registration.SetToInternalConfig(obj, clusterConfiguration); !ok {
-			return errors.Errorf("couldn't save componentconfig value for kind %q", string(kind))
-		}
-	}
-	return nil
-}
-
 // GetClusterStatus returns the kubeadm cluster status read from the kubeadm-config ConfigMap
 func GetClusterStatus(client clientset.Interface) (*kubeadmapi.ClusterStatus, error) {
-	configMap, err := client.CoreV1().ConfigMaps(metav1.NamespaceSystem).Get(constants.KubeadmConfigConfigMap, metav1.GetOptions{})
+	configMap, err := apiclient.GetConfigMapWithRetry(client, metav1.NamespaceSystem, constants.KubeadmConfigConfigMap)
 	if apierrors.IsNotFound(err) {
 		return &kubeadmapi.ClusterStatus{}, nil
 	}

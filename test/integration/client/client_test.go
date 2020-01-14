@@ -25,7 +25,7 @@ import (
 	"testing"
 	"time"
 
-	"k8s.io/api/core/v1"
+	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/fields"
@@ -36,9 +36,10 @@ import (
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/apimachinery/pkg/watch"
 	clientset "k8s.io/client-go/kubernetes"
+
+	"k8s.io/component-base/version"
 	kubeapiservertesting "k8s.io/kubernetes/cmd/kube-apiserver/app/testing"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
-	"k8s.io/kubernetes/pkg/version"
 	"k8s.io/kubernetes/test/integration/framework"
 	imageutils "k8s.io/kubernetes/test/utils/image"
 )
@@ -178,7 +179,7 @@ func TestAtomicPut(t *testing.T) {
 					tmpRC.Spec.Selector[l] = v
 					tmpRC.Spec.Template.Labels[l] = v
 				}
-				tmpRC, err = rcs.Update(tmpRC)
+				_, err = rcs.Update(tmpRC)
 				if err != nil {
 					if apierrors.IsConflict(err) {
 						// This is what we expect.
@@ -225,7 +226,7 @@ func TestPatch(t *testing.T) {
 		},
 	}
 	pods := c.CoreV1().Pods("default")
-	pod, err := pods.Create(&podBody)
+	_, err := pods.Create(&podBody)
 	if err != nil {
 		t.Fatalf("Failed creating patchpods: %v", err)
 	}
@@ -284,7 +285,7 @@ func TestPatch(t *testing.T) {
 		if err != nil {
 			t.Fatalf("Failed updating patchpod with patch type %s: %v", k, err)
 		}
-		pod, err = pods.Get(name, metav1.GetOptions{})
+		pod, err := pods.Get(name, metav1.GetOptions{})
 		if err != nil {
 			t.Fatalf("Failed getting patchpod: %v", err)
 		}

@@ -30,6 +30,8 @@ import (
 	"k8s.io/apimachinery/pkg/watch"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2emetrics "k8s.io/kubernetes/test/e2e/framework/metrics"
+	e2epod "k8s.io/kubernetes/test/e2e/framework/pod"
 	imageutils "k8s.io/kubernetes/test/utils/image"
 
 	"github.com/onsi/ginkgo"
@@ -47,7 +49,7 @@ var _ = SIGDescribe("[Feature:Windows] Density [Serial] [Slow]", func() {
 				podsNr:   10,
 				interval: 0 * time.Millisecond,
 				// percentile limit of single pod startup latency
-				podStartupLimits: framework.LatencyMetric{
+				podStartupLimits: e2emetrics.LatencyMetric{
 					Perc50: 30 * time.Second,
 					Perc90: 54 * time.Second,
 					Perc99: 59 * time.Second,
@@ -72,8 +74,6 @@ var _ = SIGDescribe("[Feature:Windows] Density [Serial] [Slow]", func() {
 type densityTest struct {
 	// number of pods
 	podsNr int
-	// number of background pods
-	bgPodsNr int
 	// interval between creating pod (rate control)
 	interval time.Duration
 	// create pods in 'batch' or 'sequence'
@@ -81,20 +81,18 @@ type densityTest struct {
 	// API QPS limit
 	APIQPSLimit int
 	// performance limits
-	cpuLimits            framework.ContainersCPUSummary
-	memLimits            framework.ResourceUsagePerContainer
-	podStartupLimits     framework.LatencyMetric
+	podStartupLimits     e2emetrics.LatencyMetric
 	podBatchStartupLimit time.Duration
 }
 
 // runDensityBatchTest runs the density batch pod creation test
-func runDensityBatchTest(f *framework.Framework, testArg densityTest) (time.Duration, []framework.PodLatencyData) {
+func runDensityBatchTest(f *framework.Framework, testArg densityTest) (time.Duration, []e2emetrics.PodLatencyData) {
 	const (
 		podType = "density_test_pod"
 	)
 	var (
 		mutex      = &sync.Mutex{}
-		watchTimes = make(map[string]metav1.Time, 0)
+		watchTimes = make(map[string]metav1.Time)
 		stopCh     = make(chan struct{})
 	)
 
@@ -125,15 +123,15 @@ func runDensityBatchTest(f *framework.Framework, testArg densityTest) (time.Dura
 		firstCreate metav1.Time
 		lastRunning metav1.Time
 		init        = true
-		e2eLags     = make([]framework.PodLatencyData, 0)
+		e2eLags     = make([]e2emetrics.PodLatencyData, 0)
 	)
 
 	for name, create := range createTimes {
 		watch, ok := watchTimes[name]
-		gomega.Expect(ok).To(gomega.Equal(true))
+		framework.ExpectEqual(ok, true)
 
 		e2eLags = append(e2eLags,
-			framework.PodLatencyData{Name: name, Latency: watch.Time.Sub(create.Time)})
+			e2emetrics.PodLatencyData{Name: name, Latency: watch.Time.Sub(create.Time)})
 
 		if !init {
 			if firstCreate.Time.After(create.Time) {
@@ -148,7 +146,7 @@ func runDensityBatchTest(f *framework.Framework, testArg densityTest) (time.Dura
 		}
 	}
 
-	sort.Sort(framework.LatencySlice(e2eLags))
+	sort.Sort(e2emetrics.LatencySlice(e2eLags))
 	batchLag := lastRunning.Time.Sub(firstCreate.Time)
 
 	deletePodsSync(f, pods)
@@ -200,12 +198,12 @@ func newInformerWatchPod(f *framework.Framework, mutex *sync.Mutex, watchTimes m
 		cache.ResourceEventHandlerFuncs{
 			AddFunc: func(obj interface{}) {
 				p, ok := obj.(*v1.Pod)
-				gomega.Expect(ok).To(gomega.Equal(true))
+				framework.ExpectEqual(ok, true)
 				go checkPodRunning(p)
 			},
 			UpdateFunc: func(oldObj, newObj interface{}) {
 				p, ok := newObj.(*v1.Pod)
-				gomega.Expect(ok).To(gomega.Equal(true))
+				framework.ExpectEqual(ok, true)
 				go checkPodRunning(p)
 			},
 		},
@@ -267,12 +265,12 @@ func deletePodsSync(f *framework.Framework, pods []*v1.Pod) {
 			defer wg.Done()
 
 			err := f.PodClient().Delete(pod.ObjectMeta.Name, metav1.NewDeleteOptions(30))
-			gomega.Expect(err).NotTo(gomega.HaveOccurred())
+			framework.ExpectNoError(err)
 
-			gomega.Expect(framework.WaitForPodToDisappear(f.ClientSet, f.Namespace.Name, pod.ObjectMeta.Name, labels.Everything(),
-				30*time.Second, 10*time.Minute)).NotTo(gomega.HaveOccurred())
+			err = e2epod.WaitForPodToDisappear(f.ClientSet, f.Namespace.Name, pod.ObjectMeta.Name, labels.Everything(),
+				30*time.Second, 10*time.Minute)
+			framework.ExpectNoError(err)
 		}(pod)
 	}
 	wg.Wait()
-	return
 }

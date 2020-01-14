@@ -26,12 +26,12 @@ import (
 	"time"
 
 	"github.com/onsi/ginkgo"
-	"github.com/onsi/gomega"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/version"
 	"k8s.io/apimachinery/pkg/util/wait"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2esset "k8s.io/kubernetes/test/e2e/framework/statefulset"
 	"k8s.io/kubernetes/test/e2e/framework/testfiles"
 )
 
@@ -42,7 +42,6 @@ type MySQLUpgradeTest struct {
 	ip               string
 	successfulWrites int
 	nextWrite        int
-	ssTester         *framework.StatefulSetTester
 }
 
 // Name returns the tracking name of the test.
@@ -61,13 +60,13 @@ func (MySQLUpgradeTest) Skip(upgCtx UpgradeContext) bool {
 }
 
 func mysqlKubectlCreate(ns, file string) {
-	input := string(testfiles.ReadOrDie(filepath.Join(mysqlManifestPath, file), ginkgo.Fail))
-	framework.RunKubectlOrDieInput(input, "create", "-f", "-", fmt.Sprintf("--namespace=%s", ns))
+	input := string(testfiles.ReadOrDie(filepath.Join(mysqlManifestPath, file)))
+	framework.RunKubectlOrDieInput(ns, input, "create", "-f", "-", fmt.Sprintf("--namespace=%s", ns))
 }
 
 func (t *MySQLUpgradeTest) getServiceIP(f *framework.Framework, ns, svcName string) string {
 	svc, err := f.ClientSet.CoreV1().Services(ns).Get(svcName, metav1.GetOptions{})
-	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	framework.ExpectNoError(err)
 	ingress := svc.Status.LoadBalancer.Ingress
 	if len(ingress) == 0 {
 		return ""
@@ -83,13 +82,12 @@ func (t *MySQLUpgradeTest) Setup(f *framework.Framework) {
 	ns := f.Namespace.Name
 	statefulsetPoll := 30 * time.Second
 	statefulsetTimeout := 10 * time.Minute
-	t.ssTester = framework.NewStatefulSetTester(f.ClientSet)
 
 	ginkgo.By("Creating a configmap")
 	mysqlKubectlCreate(ns, "configmap.yaml")
 
 	ginkgo.By("Creating a mysql StatefulSet")
-	t.ssTester.CreateStatefulSet(mysqlManifestPath, ns)
+	e2esset.CreateStatefulSet(f.ClientSet, mysqlManifestPath, ns)
 
 	ginkgo.By("Creating a mysql-test-server deployment")
 	mysqlKubectlCreate(ns, "tester.yaml")
@@ -105,17 +103,19 @@ func (t *MySQLUpgradeTest) Setup(f *framework.Framework) {
 		}
 		return true, nil
 	})
-	gomega.Expect(err).NotTo(gomega.HaveOccurred())
+	framework.ExpectNoError(err)
 	framework.Logf("Service endpoint is up")
 
 	ginkgo.By("Adding 2 names to the database")
-	gomega.Expect(t.addName(strconv.Itoa(t.nextWrite))).NotTo(gomega.HaveOccurred())
-	gomega.Expect(t.addName(strconv.Itoa(t.nextWrite))).NotTo(gomega.HaveOccurred())
+	err = t.addName(strconv.Itoa(t.nextWrite))
+	framework.ExpectNoError(err)
+	err = t.addName(strconv.Itoa(t.nextWrite))
+	framework.ExpectNoError(err)
 
 	ginkgo.By("Verifying that the 2 names have been inserted")
 	count, err := t.countNames()
-	gomega.Expect(err).NotTo(gomega.HaveOccurred())
-	gomega.Expect(count).To(gomega.Equal(2))
+	framework.ExpectNoError(err)
+	framework.ExpectEqual(count, 2)
 }
 
 // Test continually polls the db using the read and write connections, inserting data, and checking
@@ -166,8 +166,8 @@ func (t *MySQLUpgradeTest) Test(f *framework.Framework, done <-chan struct{}, up
 // Teardown performs one final check of the data's availability.
 func (t *MySQLUpgradeTest) Teardown(f *framework.Framework) {
 	count, err := t.countNames()
-	gomega.Expect(err).NotTo(gomega.HaveOccurred())
-	gomega.Expect(count >= t.successfulWrites).To(gomega.BeTrue())
+	framework.ExpectNoError(err)
+	framework.ExpectEqual(count >= t.successfulWrites, true)
 }
 
 // addName adds a new value to the db.

@@ -18,6 +18,7 @@ package evictions
 
 import (
 	"fmt"
+
 	"net/http/httptest"
 	"reflect"
 	"sync"
@@ -27,14 +28,18 @@ import (
 
 	"k8s.io/api/core/v1"
 	"k8s.io/api/policy/v1beta1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	utilerrors "k8s.io/apimachinery/pkg/util/errors"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/apimachinery/pkg/util/wait"
+	cacheddiscovery "k8s.io/client-go/discovery/cached/memory"
+	"k8s.io/client-go/dynamic"
 	"k8s.io/client-go/informers"
 	clientset "k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
+	"k8s.io/client-go/restmapper"
+	"k8s.io/client-go/scale"
 	"k8s.io/client-go/tools/cache"
 	"k8s.io/kubernetes/pkg/controller/disruption"
 	"k8s.io/kubernetes/test/integration/framework"
@@ -109,9 +114,9 @@ func TestConcurrentEvictionRequests(t *testing.T) {
 			err := wait.PollImmediate(5*time.Second, 60*time.Second, func() (bool, error) {
 				e := clientSet.PolicyV1beta1().Evictions(ns.Name).Evict(eviction)
 				switch {
-				case errors.IsTooManyRequests(e):
+				case apierrors.IsTooManyRequests(e):
 					return false, nil
-				case errors.IsConflict(e):
+				case apierrors.IsConflict(e):
 					return false, fmt.Errorf("Unexpected Conflict (409) error caused by failing to handle concurrent PDB updates: %v", e)
 				case e == nil:
 					return true, nil
@@ -127,7 +132,7 @@ func TestConcurrentEvictionRequests(t *testing.T) {
 
 			_, err = clientSet.CoreV1().Pods(ns.Name).Get(podName, metav1.GetOptions{})
 			switch {
-			case errors.IsNotFound(err):
+			case apierrors.IsNotFound(err):
 				atomic.AddUint32(&numberPodsEvicted, 1)
 				// pod was evicted and deleted so return from goroutine immediately
 				return
@@ -217,9 +222,9 @@ func TestTerminalPodEviction(t *testing.T) {
 	err = wait.PollImmediate(5*time.Second, 60*time.Second, func() (bool, error) {
 		e := clientSet.PolicyV1beta1().Evictions(ns.Name).Evict(eviction)
 		switch {
-		case errors.IsTooManyRequests(e):
+		case apierrors.IsTooManyRequests(e):
 			return false, nil
-		case errors.IsConflict(e):
+		case apierrors.IsConflict(e):
 			return false, fmt.Errorf("Unexpected Conflict (409) error caused by failing to handle concurrent PDB updates: %v", e)
 		case e == nil:
 			return true, nil
@@ -329,6 +334,17 @@ func rmSetup(t *testing.T) (*httptest.Server, framework.CloseFunc, *disruption.D
 	resyncPeriod := 12 * time.Hour
 	informers := informers.NewSharedInformerFactory(clientset.NewForConfigOrDie(restclient.AddUserAgent(&config, "pdb-informers")), resyncPeriod)
 
+	client := clientset.NewForConfigOrDie(restclient.AddUserAgent(&config, "disruption-controller"))
+
+	discoveryClient := cacheddiscovery.NewMemCacheClient(clientSet.Discovery())
+	mapper := restmapper.NewDeferredDiscoveryRESTMapper(discoveryClient)
+
+	scaleKindResolver := scale.NewDiscoveryScaleKindResolver(client.Discovery())
+	scaleClient, err := scale.NewForConfig(&config, mapper, dynamic.LegacyAPIPathResolverFunc, scaleKindResolver)
+	if err != nil {
+		t.Fatalf("Error in create scaleClient: %v", err)
+	}
+
 	rm := disruption.NewDisruptionController(
 		informers.Core().V1().Pods(),
 		informers.Policy().V1beta1().PodDisruptionBudgets(),
@@ -336,7 +352,9 @@ func rmSetup(t *testing.T) (*httptest.Server, framework.CloseFunc, *disruption.D
 		informers.Apps().V1().ReplicaSets(),
 		informers.Apps().V1().Deployments(),
 		informers.Apps().V1().StatefulSets(),
-		clientset.NewForConfigOrDie(restclient.AddUserAgent(&config, "disruption-controller")),
+		client,
+		mapper,
+		scaleClient,
 	)
 	return s, closeFn, rm, informers, clientSet
 }

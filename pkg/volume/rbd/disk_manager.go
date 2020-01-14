@@ -26,10 +26,11 @@ import (
 	"fmt"
 	"os"
 
-	"k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/klog"
-	"k8s.io/kubernetes/pkg/util/mount"
+	"k8s.io/utils/mount"
+
+	v1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	"k8s.io/kubernetes/pkg/volume"
 	"k8s.io/kubernetes/pkg/volume/util"
 )
@@ -126,7 +127,7 @@ func diskTearDown(manager diskManager, c rbdUnmounter, volPath string, mounter m
 	}
 	if notMnt {
 		if err := os.Remove(volPath); err != nil {
-			klog.V(2).Info("Error removing mountpoint ", volPath, ": ", err)
+			klog.V(2).Infof("Error removing mountpoint %s: %v", volPath, err)
 			return err
 		}
 	}

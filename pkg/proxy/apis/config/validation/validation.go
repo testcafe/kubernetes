@@ -27,7 +27,9 @@ import (
 	"k8s.io/apimachinery/pkg/util/sets"
 	"k8s.io/apimachinery/pkg/util/validation/field"
 	componentbaseconfig "k8s.io/component-base/config"
+	"k8s.io/component-base/metrics"
 	apivalidation "k8s.io/kubernetes/pkg/apis/core/validation"
+	kubefeatures "k8s.io/kubernetes/pkg/features"
 	kubeproxyconfig "k8s.io/kubernetes/pkg/proxy/apis/config"
 )
 
@@ -67,8 +69,17 @@ func Validate(config *kubeproxyconfig.KubeProxyConfiguration) field.ErrorList {
 	allErrs = append(allErrs, validateHostPort(config.MetricsBindAddress, newPath.Child("MetricsBindAddress"))...)
 
 	if config.ClusterCIDR != "" {
-		if _, _, err := net.ParseCIDR(config.ClusterCIDR); err != nil {
-			allErrs = append(allErrs, field.Invalid(newPath.Child("ClusterCIDR"), config.ClusterCIDR, "must be a valid CIDR block (e.g. 10.100.0.0/16)"))
+		if config.FeatureGates[string(kubefeatures.IPv6DualStack)] {
+			cidrs := strings.Split(config.ClusterCIDR, ",")
+			for _, cidr := range cidrs {
+				if _, _, err := net.ParseCIDR(cidr); err != nil {
+					allErrs = append(allErrs, field.Invalid(newPath.Child("ClusterCIDR"), cidr, "must be a valid CIDR block (e.g. 10.100.0.0/16 or FD02::0:0:0/96)"))
+				}
+			}
+		} else {
+			if _, _, err := net.ParseCIDR(config.ClusterCIDR); err != nil {
+				allErrs = append(allErrs, field.Invalid(newPath.Child("ClusterCIDR"), config.ClusterCIDR, "must be a valid CIDR block (e.g. 10.100.0.0/16 or FD02::0:0:0/96)"))
+			}
 		}
 	}
 
@@ -77,6 +88,7 @@ func Validate(config *kubeproxyconfig.KubeProxyConfiguration) field.ErrorList {
 	}
 
 	allErrs = append(allErrs, validateKubeProxyNodePortAddress(config.NodePortAddresses, newPath.Child("NodePortAddresses"))...)
+	allErrs = append(allErrs, validateShowHiddenMetricsVersion(config.ShowHiddenMetricsForVersion, newPath.Child("ShowHiddenMetricsForVersion"))...)
 
 	return allErrs
 }
@@ -126,10 +138,6 @@ func validateKubeProxyIPVSConfiguration(config kubeproxyconfig.KubeProxyIPVSConf
 
 func validateKubeProxyConntrackConfiguration(config kubeproxyconfig.KubeProxyConntrackConfiguration, fldPath *field.Path) field.ErrorList {
 	allErrs := field.ErrorList{}
-
-	if config.Max != nil && *config.Max < 0 {
-		allErrs = append(allErrs, field.Invalid(fldPath.Child("Max"), config.Max, "must be greater than or equal to 0"))
-	}
 
 	if config.MaxPerCore != nil && *config.MaxPerCore < 0 {
 		allErrs = append(allErrs, field.Invalid(fldPath.Child("MaxPerCore"), config.MaxPerCore, "must be greater than or equal to 0"))
@@ -266,5 +274,15 @@ func validateIPVSExcludeCIDRs(excludeCIDRs []string, fldPath *field.Path) field.
 			allErrs = append(allErrs, field.Invalid(fldPath, excludeCIDRs, "must be a valid IP block"))
 		}
 	}
+	return allErrs
+}
+
+func validateShowHiddenMetricsVersion(version string, fldPath *field.Path) field.ErrorList {
+	allErrs := field.ErrorList{}
+	errs := metrics.ValidateShowHiddenMetricsVersion(version)
+	for _, e := range errs {
+		allErrs = append(allErrs, field.Invalid(fldPath, version, e.Error()))
+	}
+
 	return allErrs
 }

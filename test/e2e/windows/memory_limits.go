@@ -35,6 +35,7 @@ import (
 	kubeletconfigv1beta1 "k8s.io/kubelet/config/v1beta1"
 	kubeletconfig "k8s.io/kubernetes/pkg/kubelet/apis/config"
 	"k8s.io/kubernetes/test/e2e/framework"
+	e2ekubectl "k8s.io/kubernetes/test/e2e/framework/kubectl"
 	imageutils "k8s.io/kubernetes/test/utils/image"
 
 	"github.com/onsi/ginkgo"
@@ -87,7 +88,7 @@ func checkNodeAllocatableTest(f *framework.Framework) {
 	framework.Logf("nodeMem says: %+v", nodeMem)
 
 	// calculate the allocatable mem based on capacity - reserved amounts
-	calculatedNodeAlloc := nodeMem.capacity.Copy()
+	calculatedNodeAlloc := nodeMem.capacity.DeepCopy()
 	calculatedNodeAlloc.Sub(nodeMem.systemReserve)
 	calculatedNodeAlloc.Sub(nodeMem.kubeReserve)
 	calculatedNodeAlloc.Sub(nodeMem.softEviction)
@@ -96,7 +97,7 @@ func checkNodeAllocatableTest(f *framework.Framework) {
 	ginkgo.By(fmt.Sprintf("Checking stated allocatable memory %v against calculated allocatable memory %v", &nodeMem.allocatable, calculatedNodeAlloc))
 
 	// sanity check against stated allocatable
-	gomega.Expect(calculatedNodeAlloc.Cmp(nodeMem.allocatable)).To(gomega.Equal(0))
+	framework.ExpectEqual(calculatedNodeAlloc.Cmp(nodeMem.allocatable), 0)
 }
 
 // Deploys `allocatablePods + 1` pods, each with a memory limit of `1/allocatablePods` of the total allocatable
@@ -186,7 +187,7 @@ func getNodeMemory(f *framework.Framework) nodeMemory {
 
 	// Assuming that agent nodes have the same config
 	// Make sure there is >0 agent nodes, then use the first one for info
-	gomega.Expect(nodeList.Size()).NotTo(gomega.Equal(0))
+	framework.ExpectNotEqual(nodeList.Size(), 0)
 
 	ginkgo.By("Getting memory details from node status and kubelet config")
 
@@ -194,7 +195,7 @@ func getNodeMemory(f *framework.Framework) nodeMemory {
 
 	nodeName := nodeList.Items[0].ObjectMeta.Name
 
-	kubeletConfig, err := getCurrentKubeletConfig(nodeName)
+	kubeletConfig, err := getCurrentKubeletConfig(nodeName, f.Namespace.Name)
 	framework.ExpectNoError(err)
 
 	systemReserve, err := resource.ParseQuantity(kubeletConfig.SystemReserved["memory"])
@@ -249,9 +250,9 @@ func getTotalAllocatableMemory(f *framework.Framework) *resource.Quantity {
 }
 
 // getCurrentKubeletConfig modified from test/e2e_node/util.go
-func getCurrentKubeletConfig(nodeName string) (*kubeletconfig.KubeletConfiguration, error) {
+func getCurrentKubeletConfig(nodeName, namespace string) (*kubeletconfig.KubeletConfiguration, error) {
 
-	resp := pollConfigz(5*time.Minute, 5*time.Second, nodeName)
+	resp := pollConfigz(5*time.Minute, 5*time.Second, nodeName, namespace)
 	kubeCfg, err := decodeConfigz(resp)
 	if err != nil {
 		return nil, err
@@ -260,10 +261,11 @@ func getCurrentKubeletConfig(nodeName string) (*kubeletconfig.KubeletConfigurati
 }
 
 // Causes the test to fail, or returns a status 200 response from the /configz endpoint
-func pollConfigz(timeout time.Duration, pollInterval time.Duration, nodeName string) *http.Response {
+func pollConfigz(timeout time.Duration, pollInterval time.Duration, nodeName, namespace string) *http.Response {
 	// start local proxy, so we can send graceful deletion over query string, rather than body parameter
 	ginkgo.By("Opening proxy to cluster")
-	cmd := framework.KubectlCmd("proxy", "-p", "0")
+	tk := e2ekubectl.NewTestKubeconfig(framework.TestContext.CertDir, framework.TestContext.Host, framework.TestContext.KubeConfig, framework.TestContext.KubeContext, framework.TestContext.KubectlPath, namespace)
+	cmd := tk.KubectlCmd("proxy", "-p", "0")
 	stdout, stderr, err := framework.StartCmdAndStreamOutput(cmd)
 	framework.ExpectNoError(err)
 	defer stdout.Close()
@@ -276,7 +278,7 @@ func pollConfigz(timeout time.Duration, pollInterval time.Duration, nodeName str
 	output := string(buf[:n])
 	proxyRegexp := regexp.MustCompile("Starting to serve on 127.0.0.1:([0-9]+)")
 	match := proxyRegexp.FindStringSubmatch(output)
-	gomega.Expect(len(match)).To(gomega.Equal(2))
+	framework.ExpectEqual(len(match), 2)
 	port, err := strconv.Atoi(match[1])
 	framework.ExpectNoError(err)
 	ginkgo.By("http requesting node kubelet /configz")

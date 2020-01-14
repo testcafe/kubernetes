@@ -26,7 +26,7 @@ import (
 // PodBackoffMap is a structure that stores backoff related information for pods
 type PodBackoffMap struct {
 	// lock for performing actions on this PodBackoffMap
-	lock sync.Mutex
+	lock sync.RWMutex
 	// initial backoff duration
 	initialDuration time.Duration
 	// maximal backoff duration
@@ -49,8 +49,8 @@ func NewPodBackoffMap(initialDuration, maxDuration time.Duration) *PodBackoffMap
 
 // GetBackoffTime returns the time that nsPod completes backoff
 func (pbm *PodBackoffMap) GetBackoffTime(nsPod ktypes.NamespacedName) (time.Time, bool) {
-	pbm.lock.Lock()
-	defer pbm.lock.Unlock()
+	pbm.lock.RLock()
+	defer pbm.lock.RUnlock()
 	if _, found := pbm.podAttempts[nsPod]; found == false {
 		return time.Time{}, false
 	}
@@ -58,20 +58,6 @@ func (pbm *PodBackoffMap) GetBackoffTime(nsPod ktypes.NamespacedName) (time.Time
 	backoffDuration := pbm.calculateBackoffDuration(nsPod)
 	backoffTime := lastUpdateTime.Add(backoffDuration)
 	return backoffTime, true
-}
-
-// TryBackoffAndWait tries to perform backoff for a non-preempting pod.
-// it is invoked from factory.go if util.PodPriorityEnabled() returns false.
-func (pbm *PodBackoffMap) TryBackoffAndWait(nsPod ktypes.NamespacedName, stop <-chan struct{}) bool {
-	pbm.lock.Lock()
-	defer pbm.lock.Unlock()
-	backoffDuration := pbm.calculateBackoffDuration(nsPod)
-	select {
-	case <-time.After(backoffDuration):
-		return true
-	case <-stop:
-		return false
-	}
 }
 
 // calculateBackoffDuration is a helper function for calculating the backoffDuration

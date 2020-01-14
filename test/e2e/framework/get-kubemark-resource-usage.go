@@ -20,6 +20,9 @@ import (
 	"bufio"
 	"fmt"
 	"strings"
+
+	// TODO: Remove the following imports (ref: https://github.com/kubernetes/kubernetes/issues/81245)
+	e2essh "k8s.io/kubernetes/test/e2e/framework/ssh"
 )
 
 // KubemarkResourceUsage is a struct for tracking the resource usage of kubemark.
@@ -30,7 +33,7 @@ type KubemarkResourceUsage struct {
 }
 
 func getMasterUsageByPrefix(prefix string) (string, error) {
-	sshResult, err := SSH(fmt.Sprintf("ps ax -o %%cpu,rss,command | tail -n +2 | grep %v | sed 's/\\s+/ /g'", prefix), GetMasterHost()+":22", TestContext.Provider)
+	sshResult, err := e2essh.SSH(fmt.Sprintf("ps ax -o %%cpu,rss,command | tail -n +2 | grep %v | sed 's/\\s+/ /g'", prefix), GetMasterHost()+":22", TestContext.Provider)
 	if err != nil {
 		return "", err
 	}

@@ -29,8 +29,8 @@ import (
 	"path/filepath"
 	"time"
 
-	"k8s.io/api/core/v1"
-	"k8s.io/apimachinery/pkg/api/errors"
+	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -39,6 +39,7 @@ import (
 	"k8s.io/client-go/tools/clientcmd"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
 	e2e "k8s.io/kubernetes/test/e2e/framework"
+	"k8s.io/kubernetes/test/e2e/framework/service"
 
 	"k8s.io/klog"
 )
@@ -126,7 +127,7 @@ func main() {
 			// wait until the namespace disappears
 			for i := 0; i < int(namespaceDeleteTimeout/time.Second); i++ {
 				if _, err := client.CoreV1().Namespaces().Get(ns, metav1.GetOptions{}); err != nil {
-					if errors.IsNotFound(err) {
+					if apierrors.IsNotFound(err) {
 						return
 					}
 				}
@@ -261,7 +262,7 @@ func main() {
 		klog.Warningf("Failed to build restclient: %v", err)
 		return
 	}
-	proxyRequest, errProxy := e2e.GetServicesProxyRequest(client, rclient.Get())
+	proxyRequest, errProxy := service.GetServicesProxyRequest(client, rclient.Get())
 	if errProxy != nil {
 		klog.Warningf("Get services proxy request failed: %v", errProxy)
 		return

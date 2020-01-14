@@ -25,14 +25,14 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"k8s.io/apimachinery/pkg/api/errors"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/util/wait"
 	auditinternal "k8s.io/apiserver/pkg/apis/audit"
 	"k8s.io/apiserver/pkg/features"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
-	utilfeaturetesting "k8s.io/apiserver/pkg/util/feature/testing"
 	"k8s.io/client-go/kubernetes"
+	featuregatetesting "k8s.io/component-base/featuregate/testing"
 	"k8s.io/kubernetes/cmd/kube-apiserver/app/options"
 	"k8s.io/kubernetes/test/integration/framework"
 	"k8s.io/kubernetes/test/utils"
@@ -44,7 +44,7 @@ func TestDynamicAudit(t *testing.T) {
 	stopCh := make(chan struct{})
 	defer close(stopCh)
 
-	defer utilfeaturetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DynamicAuditing, true)()
+	defer featuregatetesting.SetFeatureGateDuringTest(t, utilfeature.DefaultFeatureGate, features.DynamicAuditing, true)()
 	kubeclient, _ := framework.StartTestServer(t, stopCh, framework.TestServerSetup{
 		ModifyServerRunOptions: func(opts *options.ServerRunOptions) {
 			opts.Audit.DynamicOptions.Enabled = true
@@ -231,7 +231,7 @@ func sinkHealth(t *testing.T, kubeclient kubernetes.Interface, servers ...*utils
 // corresponding expected audit event
 func simpleOp(name string, kubeclient kubernetes.Interface) ([]utils.AuditEvent, error) {
 	_, err := kubeclient.CoreV1().ConfigMaps(namespace).Get(name, metav1.GetOptions{})
-	if err != nil && !errors.IsNotFound(err) {
+	if err != nil && !apierrors.IsNotFound(err) {
 		return nil, err
 	}
 
@@ -274,8 +274,7 @@ func asyncOps(
 				continue
 			}
 			e := expected.Load().([]utils.AuditEvent)
-			evList := []utils.AuditEvent{}
-			evList = append(e, exp...)
+			evList := append(e, exp...)
 			expected.Store(evList)
 		}
 	}

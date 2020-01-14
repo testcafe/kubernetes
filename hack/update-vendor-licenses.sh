@@ -87,13 +87,17 @@ process_content () {
      # - gopkg.in/square/go-jose.v2
      package_root=$(echo "${package}" |grep -oh '.*\.v[0-9]')
      ;;
-    *)
+    */*)
      package_root=$(echo "${package}" |awk -F/ '{ print $1"/"$2 }')
+     ;;
+    *)
+     package_root="${package}"
      ;;
   esac
 
   # Find files - only root and package level
-  local_files=($(
+  local_files=()
+  IFS=" " read -r -a local_files <<< "$(
     for dir_root in ${package} ${package_root}; do
       [[ -d ${DEPS_DIR}/${dir_root} ]] || continue
 
@@ -101,7 +105,7 @@ process_content () {
       find "${DEPS_DIR}/${dir_root}" \
           -xdev -follow -maxdepth ${find_maxdepth} \
           -type f "${find_names[@]}"
-    done | sort -u))
+    done | sort -u)"
 
   local index
   local f
@@ -126,13 +130,13 @@ process_content () {
 #############################################################################
 # MAIN
 #############################################################################
-KUBE_ROOT=$(dirname "${BASH_SOURCE}")/..
+KUBE_ROOT=$(dirname "${BASH_SOURCE[0]}")/..
 source "${KUBE_ROOT}/hack/lib/init.sh"
 
 export GO111MODULE=on
 
 # Check bash version
-if ((${BASH_VERSINFO[0]}<4)); then
+if (( BASH_VERSINFO[0] < 4 )); then
   echo
   echo "ERROR: Bash v4+ required."
   # Extra help for OSX
@@ -161,7 +165,7 @@ echo "= Kubernetes licensed under: ="
 echo
 cat "${LICENSE_ROOT}/LICENSE"
 echo
-echo "= LICENSE $(cat "${LICENSE_ROOT}/LICENSE" | md5sum | awk '{print $1}')"
+echo "= LICENSE $(kube::util::md5 "${LICENSE_ROOT}/LICENSE")"
 echo "================================================================================"
 ) > ${TMP_LICENSE_FILE}
 
@@ -210,7 +214,7 @@ __EOF__
   cat "${file}"
 
   echo
-  echo "= ${file} $(cat "${file}" | md5sum | awk '{print $1}')"
+  echo "= ${file} $(kube::util::md5 "${file}")"
   echo "================================================================================"
   echo
 done >> ${TMP_LICENSE_FILE}

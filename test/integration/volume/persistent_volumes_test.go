@@ -34,8 +34,8 @@ import (
 	clientset "k8s.io/client-go/kubernetes"
 	restclient "k8s.io/client-go/rest"
 	ref "k8s.io/client-go/tools/reference"
+	fakecloud "k8s.io/cloud-provider/fake"
 	"k8s.io/kubernetes/pkg/api/legacyscheme"
-	fakecloud "k8s.io/kubernetes/pkg/cloudprovider/providers/fake"
 	persistentvolumecontroller "k8s.io/kubernetes/pkg/controller/volume/persistentvolume"
 	"k8s.io/kubernetes/pkg/volume"
 	volumetest "k8s.io/kubernetes/pkg/volume/testing"
@@ -666,11 +666,10 @@ func TestPersistentVolumeMultiPVsPVCs(t *testing.T) {
 
 			select {
 			case <-stopCh:
-				break
+				return
 			default:
 				continue
 			}
-
 		}
 	}()
 
@@ -1109,7 +1108,7 @@ func createClients(ns *v1.Namespace, t *testing.T, s *httptest.Server, syncPerio
 		Burst:         1000000,
 	})
 
-	host := volumetest.NewFakeVolumeHost("/tmp/fake", nil, nil)
+	host := volumetest.NewFakeVolumeHost(t, "/tmp/fake", nil, nil)
 	plugin := &volumetest.FakeVolumePlugin{
 		PluginName:             provisionerPluginName,
 		Host:                   host,
@@ -1123,7 +1122,7 @@ func createClients(ns *v1.Namespace, t *testing.T, s *httptest.Server, syncPerio
 		Detachers:              nil,
 	}
 	plugins := []volume.VolumePlugin{plugin}
-	cloud := &fakecloud.FakeCloud{}
+	cloud := &fakecloud.Cloud{}
 	informers := informers.NewSharedInformerFactory(testClient, getSyncPeriod(syncPeriod))
 	ctrl, err := persistentvolumecontroller.NewController(
 		persistentvolumecontroller.ControllerParameters{

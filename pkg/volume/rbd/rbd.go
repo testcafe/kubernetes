@@ -23,7 +23,12 @@ import (
 	"regexp"
 	dstrings "strings"
 
-	"k8s.io/api/core/v1"
+	"k8s.io/klog"
+	utilexec "k8s.io/utils/exec"
+	"k8s.io/utils/mount"
+	utilstrings "k8s.io/utils/strings"
+
+	v1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -31,13 +36,11 @@ import (
 	"k8s.io/apimachinery/pkg/util/uuid"
 	utilfeature "k8s.io/apiserver/pkg/util/feature"
 	clientset "k8s.io/client-go/kubernetes"
-	"k8s.io/klog"
 	"k8s.io/kubernetes/pkg/features"
-	"k8s.io/kubernetes/pkg/util/mount"
 	"k8s.io/kubernetes/pkg/volume"
+	"k8s.io/kubernetes/pkg/volume/util"
 	volutil "k8s.io/kubernetes/pkg/volume/util"
 	"k8s.io/kubernetes/pkg/volume/util/volumepathhandler"
-	utilstrings "k8s.io/utils/strings"
 )
 
 var (
@@ -71,7 +74,6 @@ const (
 	rbdDefaultAdminId              = "admin"
 	rbdDefaultAdminSecretNamespace = "default"
 	rbdDefaultPool                 = "rbd"
-	rbdDefaultUserId               = rbdDefaultAdminId
 )
 
 func getPath(uid types.UID, volName string, host volume.VolumeHost) string {
@@ -105,10 +107,6 @@ func (plugin *rbdPlugin) GetVolumeName(spec *volume.Spec) (string, error) {
 
 func (plugin *rbdPlugin) CanSupport(spec *volume.Spec) bool {
 	return (spec.Volume != nil && spec.Volume.RBD != nil) || (spec.PersistentVolume != nil && spec.PersistentVolume.Spec.RBD != nil)
-}
-
-func (plugin *rbdPlugin) IsMigratedToCSI() bool {
-	return false
 }
 
 func (plugin *rbdPlugin) RequiresRemount() bool {
@@ -202,7 +200,15 @@ func (plugin *rbdPlugin) ExpandVolumeDevice(spec *volume.Spec, newSize resource.
 }
 
 func (plugin *rbdPlugin) NodeExpand(resizeOptions volume.NodeResizeOptions) (bool, error) {
-	_, err := volutil.GenericResizeFS(plugin.host, plugin.GetPluginName(), resizeOptions.DevicePath, resizeOptions.DeviceMountPath)
+	fsVolume, err := util.CheckVolumeModeFilesystem(resizeOptions.VolumeSpec)
+	if err != nil {
+		return false, fmt.Errorf("error checking VolumeMode: %v", err)
+	}
+	// if volume is not a fs file system, there is nothing for us to do here.
+	if !fsVolume {
+		return true, nil
+	}
+	_, err = volutil.GenericResizeFS(plugin.host, plugin.GetPluginName(), resizeOptions.DevicePath, resizeOptions.DeviceMountPath)
 	if err != nil {
 		return false, err
 	}
@@ -374,8 +380,13 @@ func (plugin *rbdPlugin) newUnmounterInternal(volName string, podUID types.UID, 
 
 func (plugin *rbdPlugin) ConstructVolumeSpec(volumeName, mountPath string) (*volume.Spec, error) {
 	mounter := plugin.host.GetMounter(plugin.GetPluginName())
-	pluginDir := plugin.host.GetPluginDir(plugin.GetPluginName())
-	sourceName, err := mounter.GetDeviceNameFromMount(mountPath, pluginDir)
+	kvh, ok := plugin.host.(volume.KubeletVolumeHost)
+	if !ok {
+		return nil, fmt.Errorf("plugin volume host does not implement KubeletVolumeHost interface")
+	}
+	hu := kvh.GetHostUtil()
+	pluginMntDir := volutil.GetPluginMountDir(plugin.host, plugin.GetPluginName())
+	sourceName, err := hu.GetDeviceNameFromMount(mounter, mountPath, pluginMntDir)
 	if err != nil {
 		return nil, err
 	}
@@ -489,7 +500,7 @@ func (plugin *rbdPlugin) NewBlockVolumeMapper(spec *volume.Spec, pod *v1.Pod, _ 
 	return plugin.newBlockVolumeMapperInternal(spec, uid, &RBDUtil{}, secret, plugin.host.GetMounter(plugin.GetPluginName()), plugin.host.GetExec(plugin.GetPluginName()))
 }
 
-func (plugin *rbdPlugin) newBlockVolumeMapperInternal(spec *volume.Spec, podUID types.UID, manager diskManager, secret string, mounter mount.Interface, exec mount.Exec) (volume.BlockVolumeMapper, error) {
+func (plugin *rbdPlugin) newBlockVolumeMapperInternal(spec *volume.Spec, podUID types.UID, manager diskManager, secret string, mounter mount.Interface, exec utilexec.Interface) (volume.BlockVolumeMapper, error) {
 	mon, err := getVolumeSourceMonitors(spec)
 	if err != nil {
 		return nil, err
@@ -757,7 +768,7 @@ type rbd struct {
 	ReadOnly bool
 	plugin   *rbdPlugin
 	mounter  *mount.SafeFormatAndMount
-	exec     mount.Exec
+	exec     utilexec.Interface
 	// Utility interface that provides API calls to the provider to attach/detach disks.
 	manager                diskManager
 	volume.MetricsProvider `json:"-"`
@@ -825,14 +836,14 @@ func (b *rbdMounter) CanMount() error {
 	return nil
 }
 
-func (b *rbdMounter) SetUp(fsGroup *int64) error {
-	return b.SetUpAt(b.GetPath(), fsGroup)
+func (b *rbdMounter) SetUp(mounterArgs volume.MounterArgs) error {
+	return b.SetUpAt(b.GetPath(), mounterArgs)
 }
 
-func (b *rbdMounter) SetUpAt(dir string, fsGroup *int64) error {
+func (b *rbdMounter) SetUpAt(dir string, mounterArgs volume.MounterArgs) error {
 	// diskSetUp checks mountpoints and prevent repeated calls
 	klog.V(4).Infof("rbd: attempting to setup at %s", dir)
-	err := diskSetUp(b.manager, *b, dir, b.mounter, fsGroup)
+	err := diskSetUp(b.manager, *b, dir, b.mounter, mounterArgs.FsGroup)
 	if err != nil {
 		klog.Errorf("rbd: failed to setup at %s %v", dir, err)
 	}
@@ -884,6 +895,7 @@ type rbdDiskMapper struct {
 }
 
 var _ volume.BlockVolumeUnmapper = &rbdDiskUnmapper{}
+var _ volume.CustomBlockVolumeUnmapper = &rbdDiskUnmapper{}
 
 // GetGlobalMapPath returns global map path and error
 // path: plugins/kubernetes.io/{PluginName}/volumeDevices/{rbd pool}-image-{rbd image-name}/{podUid}
@@ -896,14 +908,6 @@ func (rbd *rbd) GetGlobalMapPath(spec *volume.Spec) (string, error) {
 // volumeName: pv0001
 func (rbd *rbd) GetPodDeviceMapPath() (string, string) {
 	return rbd.rbdPodDeviceMapPath()
-}
-
-func (rbd *rbdDiskMapper) SetUpDevice() (string, error) {
-	return "", nil
-}
-
-func (rbd *rbdDiskMapper) MapDevice(devicePath, globalMapPath, volumeMapPath, volumeMapName string, podUID types.UID) error {
-	return volutil.MapBlockVolume(devicePath, globalMapPath, volumeMapPath, volumeMapName, podUID)
 }
 
 func (rbd *rbd) rbdGlobalMapPath(spec *volume.Spec) (string, error) {
@@ -986,6 +990,10 @@ func (rbd *rbdDiskUnmapper) TearDownDevice(mapPath, _ string) error {
 	}
 	klog.V(4).Infof("rbd: successfully detached disk: %s", mapPath)
 
+	return nil
+}
+
+func (rbd *rbdDiskUnmapper) UnmapPodDevice() error {
 	return nil
 }
 
@@ -1079,15 +1087,6 @@ func getVolumeAccessModes(spec *volume.Spec) ([]v1.PersistentVolumeAccessMode, e
 	}
 
 	return nil, nil
-}
-
-func parsePodSecret(pod *v1.Pod, secretName string, kubeClient clientset.Interface) (string, error) {
-	secret, err := volutil.GetSecretForPod(pod, secretName, kubeClient)
-	if err != nil {
-		klog.Errorf("failed to get secret from [%q/%q]: %+v", pod.Namespace, secretName, err)
-		return "", fmt.Errorf("failed to get secret from [%q/%q]: %+v", pod.Namespace, secretName, err)
-	}
-	return parseSecretMap(secret)
 }
 
 func parsePVSecret(namespace, secretName string, kubeClient clientset.Interface) (string, error) {

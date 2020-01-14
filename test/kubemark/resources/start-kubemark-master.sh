@@ -187,6 +187,30 @@ current-context: kube-scheduler
 EOF
 }
 
+function create-addonmanager-kubeconfig {
+  echo "Creating addonmanager kubeconfig file"
+  mkdir -p "${KUBE_ROOT}/k8s_auth_data/addon-manager"
+  cat <<EOF >"${KUBE_ROOT}/k8s_auth_data/addon-manager/kubeconfig"
+apiVersion: v1
+kind: Config
+users:
+- name: addon-manager
+  user:
+    token: ${ADDON_MANAGER_TOKEN}
+clusters:
+- name: local
+  cluster:
+    insecure-skip-tls-verify: true
+    server: https://localhost:443
+contexts:
+- context:
+    cluster: local
+    user: addon-manager
+  name: addon-manager
+current-context: addon-manager
+EOF
+}
+
 function assemble-docker-flags {
 	echo "Assemble docker command line flags"
 	local docker_opts="-p /var/run/docker.pid --iptables=false --ip-masq=false"
@@ -233,7 +257,6 @@ function load-docker-images {
 # Computes command line arguments to be passed to kubelet.
 function compute-kubelet-params {
 	local params="${KUBELET_TEST_ARGS:-}"
-	params+=" --allow-privileged=true"
 	params+=" --cgroup-root=/"
 	params+=" --cloud-provider=gce"
 	params+=" --pod-manifest-path=/etc/kubernetes/manifests"
@@ -681,6 +704,10 @@ if [[ ! -f "${KUBE_ROOT}/k8s_auth_data/kube-scheduler/kubeconfig" ]]; then
 	create-kubescheduler-kubeconfig
 fi
 
+ADDON_MANAGER_TOKEN=$(dd if=/dev/urandom bs=128 count=1 2>/dev/null | base64 | tr -d "=+/" | dd bs=32 count=1 2>/dev/null)
+echo "${ADDON_MANAGER_TOKEN},system:addon-manager,admin,system:masters" >> "${KUBE_ROOT}/k8s_auth_data/known_tokens.csv"
+create-addonmanager-kubeconfig
+
 # Mount master PD for etcd and create symbolic links to it.
 {
 	main_etcd_mount_point="/mnt/disks/master-pd"
@@ -749,4 +776,4 @@ until [ "$(curl 127.0.0.1:8080/healthz 2> /dev/null)" == "ok" ]; do
 	fi
 done
 
-echo "Done for the configuration for kubermark master"
+echo "Done for the configuration for kubemark master"
